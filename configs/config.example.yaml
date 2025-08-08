@@ -1,0 +1,59 @@
+app:
+  log_level: ""              # one of: debug, info, warn, error
+  metrics_addr: ":9090"        # optional, empty disables
+  dry_run: false            # don't start real connectors (future use)
+
+connectors:
+  rabbitmq:
+    enabled: true
+    url: "amqp://user:pass@localhost:5672/"
+    queue: "bridge.in"
+    prefetch: 200               # >0
+    ttl: "60s"                 # Go duration string
+    tls:
+      enabled: false
+      ca_file: ""
+      cert_file: ""
+      key_file: ""
+      insecure_skip_verify: false
+
+  # kafka:
+  #   enabled: true
+  #   brokers: ["localhost:9092"] # at least one
+  #   topic: "bridge.out"
+  #   group: "cfgcheck"
+  #   acks: "all"                  # one of: none, one, all
+  #   linger_ms: 10                 # >=0
+  #   tls:
+  #     enabled: false
+  #     ca_file: ""
+  #     cert_file: ""
+  #     key_file: ""
+  #     insecure_skip_verify: false
+
+  nats:
+    enabled: false
+    url: "nats://localhost:4222"
+    stream: "BRIDGE"
+    subject: "bridge.in"
+    pull_batch: 64               # >0
+    tls:
+      enabled: false
+      ca_file: ""
+      cert_file: ""
+      key_file: ""
+      insecure_skip_verify: false
+
+filters:
+  - name: "drop-empty-payload"
+    type: "drop"                # drop|min
+    match:
+      field: "payload"
+      op: "empty"               # only syntax-checked here
+
+  - name: "min-score"
+    type: "min"
+    match:
+      field: "headers.score"
+      op: ">="
+      value: 0.7

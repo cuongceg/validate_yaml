@@ -1,0 +1,21 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+      {
+        "name": "Debug cfgcheck",
+        "type": "go",
+        "request": "launch",
+        "mode": "debug",
+        "program": "${workspaceFolder}/cmd/cfgcheck",
+        "args": ["-c", "${workspaceFolder}/configs/config.example.yaml", "--print"],
+        "cwd": "${workspaceFolder}"
+      },
+      {
+        "name": "Test: internal/config",
+        "type": "go",
+        "request": "launch",
+        "mode": "test",
+        "program": "${workspaceFolder}/internal/config"
+      }
+    ]
+  }
