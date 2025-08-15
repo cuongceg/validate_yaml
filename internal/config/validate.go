@@ -1,111 +1,114 @@
 package config
+
 import (
 	"errors"
 	"fmt"
-	"net"
-	"net/url"
+	"slices"
+	"strings"
 )
 
-func Validate(c *Config) error {
-	var errs []error
+func (c *Config) Validate() error {
+	var errs []string
 
-	// app
-	switch c.App.LogLevel {
-	case "debug", "info", "warn", "error":
+	if c.SchemaVersion <= 0 {
+		errs = append(errs, "schema_version must be >= 1")
+	}
+
+	if len(c.Routes) == 0 {
+		errs = append(errs, "routes must not be empty")
+	}
+	for i, r := range c.Routes {
+		path := fmt.Sprintf("routes[%d]", i)
+
+		if r.From == "" {
+			errs = append(errs, path+".from is required")
+		} else if !oneOf(r.From, "rabbit", "kafka", "nats") {
+			errs = append(errs, fmt.Sprintf("%s.from=%q must be one of rabbit|kafka|nats", path, r.From))
+		} else if slices.Contains(r.To, r.From) {
+			errs = append(errs, fmt.Sprintf("%s.from=%q must not be the same as any target in to", path, r.From))
+		}
+
+		if r.Direction == Forward || r.Direction == Both {
+			if len(r.To) == 0 {
+				errs = append(errs, path+".to must not be empty when direction=forward|both")
+			} else {
+				for _, t := range r.To {
+					if !oneOf(t, "rabbit", "kafka", "nats") {
+						errs = append(errs, fmt.Sprintf("%s.to contains invalid target %q (valid: rabbit|kafka|nats)", path, t))
+					}
+				}
+			}
+		}
+
+		if r.QoS.MaxInflight < 1 {
+			errs = append(errs, fmt.Sprintf("%s.qos.max_inflight must be >= 1", path))
+		}
+		if r.TTL.Timeout.Duration < 0 {
+			errs = append(errs, fmt.Sprintf("%s.ttl.timeout must be >= 0", path))
+		}
+		if r.TTL.MaxHops < 0 {
+			errs = append(errs, fmt.Sprintf("%s.ttl.max_hops must be >= 0", path))
+		}
+
+		for j, f := range r.Filters {
+			fpath := fmt.Sprintf("%s.filters[%d]", path, j)
+			switch f.Type {
+			case "drop", "minimum":
+				// ok
+			default:
+				errs = append(errs, fmt.Sprintf("%s.type=%q invalid (valid: drop|minimum)", fpath, f.Type))
+			}
+			// optional: topics regex/glob check ở bước sau
+			if f.Type == "minimum" && f.Window.Duration <= 0 {
+				errs = append(errs, fmt.Sprintf("%s.window must be > 0 for type=minimum", fpath))
+			}
+		}
+	}
+
+	switch c.Compression {
+	case "none", "snappy", "zstd", "":
 	default:
-		errs = append(errs, fmt.Errorf("app.log_level must be one of: debug|info|warn|error"))
+		errs = append(errs, fmt.Sprintf("compression=%q invalid (valid: none|snappy|zstd)", c.Compression))
 	}
 
-	// connectors presence
-	if c.Connectors.RabbitMQ == nil && c.Connectors.Kafka == nil && c.Connectors.NATS == nil {
-		errs = append(errs, errors.New("at least one connectors.[rabbitmq|kafka|nats] must be present"))
+	// Adapter “tối thiểu” – không bắt buộc phải khai báo tất cả
+	if c.Rabbit.URL == "" && c.Kafka.Brokers == nil && c.NATS.URL == "" {
+		errs = append(errs, "at least one adapter (rabbit/kafka/nats) must be configured")
 	}
 
-	if r := c.Connectors.RabbitMQ; r != nil {
-		if r.Enabled {
-			if err := mustURLScheme(r.URL, "amqp", "amqps"); err != nil {
-				errs = append(errs, fmt.Errorf("connectors.rabbitmq.url: %w", err))
-			}
-			if r.Queue == "" { errs = append(errs, errors.New("connectors.rabbitmq.queue is required")) }
-			if r.Prefetch <= 0 { errs = append(errs, errors.New("connectors.rabbitmq.prefetch must be > 0")) }
-			if _, err := ParseDuration(r.TTL); err != nil {
-				errs = append(errs, fmt.Errorf("connectors.rabbitmq.ttl invalid duration: %v", err))
-			}
-			if err := validateTLS("connectors.rabbitmq.tls", r.TLS); err != nil { errs = append(errs, err) }
+	if c.Rabbit.TLS.InsecureSkipVerify || c.Kafka.TLS.InsecureSkipVerify || c.NATS.TLS.InsecureSkipVerify {
+		fmt.Println("WARNING: TLS InsecureSkipVerify is enabled. This is insecure and should only be used for testing purposes.")
+	}
+
+	if c.Rabbit.TLS.Enabled && !c.Rabbit.TLS.InsecureSkipVerify {
+		if c.Rabbit.TLS.CertFile == "" || c.Rabbit.TLS.KeyFile == "" || c.Rabbit.TLS.CAFile == "" {
+			errs = append(errs, "rabbit.tls.cert_file, rabbit.tls.key_file and rabbit.tls.cafile must be set when TLS is enabled")
 		}
 	}
 
-	if k := c.Connectors.Kafka; k != nil {
-		if k.Enabled {
-			if len(k.Brokers) == 0 { errs = append(errs, errors.New("connectors.kafka.brokers must have at least one host:port")) }
-			for _, b := range k.Brokers {
-				if err := hostPort(b); err != nil { errs = append(errs, fmt.Errorf("connectors.kafka.brokers[%s]: %v", b, err)) }
-			}
-			if k.Topic == "" { errs = append(errs, errors.New("connectors.kafka.topic is required")) }
-			if k.Group == "" { errs = append(errs, errors.New("connectors.kafka.group is required")) }
-			switch k.Acks { case "none", "one", "all": default:
-				errs = append(errs, errors.New("connectors.kafka.acks must be one of: none|one|all")) }
-			if k.LingerMS < 0 { errs = append(errs, errors.New("connectors.kafka.linger_ms must be >= 0")) }
-			if err := validateTLS("connectors.kafka.tls", k.TLS); err != nil { errs = append(errs, err) }
+	if c.Kafka.TLS.Enabled && !c.Kafka.TLS.InsecureSkipVerify {
+		if c.Kafka.TLS.CertFile == "" || c.Kafka.TLS.KeyFile == "" || c.Kafka.TLS.CAFile == "" {
+			errs = append(errs, "kafka.tls.cert_file, kafka.tls.key_file and kafka.tls.cafile must be set when TLS is enabled")
 		}
 	}
 
-	if n := c.Connectors.NATS; n != nil {
-		if n.Enabled {
-			if err := mustURLScheme(n.URL, "nats", "tls"); err != nil {
-				errs = append(errs, fmt.Errorf("connectors.nats.url: %w", err))
-			}
-			if n.Stream == "" { errs = append(errs, errors.New("connectors.nats.stream is required")) }
-			if n.Subject == "" { errs = append(errs, errors.New("connectors.nats.subject is required")) }
-			if n.PullBatch <= 0 { errs = append(errs, errors.New("connectors.nats.pull_batch must be > 0")) }
-			if err := validateTLS("connectors.nats.tls", n.TLS); err != nil { errs = append(errs, err) }
+	if c.NATS.TLS.Enabled && !c.NATS.TLS.InsecureSkipVerify {
+		if c.NATS.TLS.CertFile == "" || c.NATS.TLS.KeyFile == "" || c.NATS.TLS.CAFile == "" {
+			errs = append(errs, "nats.tls.cert_file, nats.tls.key_file and nats.tls.cafile must be set when TLS is enabled")
 		}
-	}
-
-	// filters (syntactic checks only for project 1)
-	for i, f := range c.Filters {
-		if f.Name == "" { errs = append(errs, fmt.Errorf("filters[%d].name is required", i)) }
-		switch f.Type { case "drop", "min": default:
-			errs = append(errs, fmt.Errorf("filters[%d].type must be drop|min", i)) }
-		if f.Match.Field == "" { errs = append(errs, fmt.Errorf("filters[%d].match.field is required", i)) }
-		if f.Match.Op == "" { errs = append(errs, fmt.Errorf("filters[%d].match.op is required", i)) }
 	}
 
 	if len(errs) > 0 {
-		return joinErrs(errs)
+		return errors.New(strings.Join(errs, "; "))
 	}
 	return nil
 }
 
-func validateTLS(prefix string, t TLSConfig) error {
-	if !t.Enabled { return nil }
-	var errs []error
-	if t.CertFile == "" { errs = append(errs, fmt.Errorf("%s.cert_file is required when enabled=true", prefix)) }
-	if t.KeyFile == "" { errs = append(errs, fmt.Errorf("%s.key_file is required when enabled=true", prefix)) }
-	if len(errs) > 0 { return joinErrs(errs) }
-	return nil
-}
-
-func mustURLScheme(raw string, schemes ...string) error {
-	u, err := url.Parse(raw)
-	if err != nil { return fmt.Errorf("invalid url: %v", err) }
-	ok := false
-	for _, s := range schemes { if u.Scheme == s { ok = true; break } }
-	if !ok { return fmt.Errorf("url scheme must be one of %v", schemes) }
-	return nil
-}
-
-func hostPort(s string) error {
-	h, p, err := net.SplitHostPort(s)
-	if err != nil { return err }
-	if h == "" { return errors.New("empty host") }
-	if p == "" { return errors.New("empty port") }
-	return nil
-}
-
-// joinErrs renders multi-error nicely for CLI output.
-func joinErrs(errs []error) error {
-	msg := "config validation failed:\n"
-	for _, e := range errs { msg += "  - " + e.Error() + "\n" }
-	return errors.New(msg)
+func oneOf(s string, set ...string) bool {
+	for _, v := range set {
+		if s == v {
+			return true
+		}
+	}
+	return false
 }
