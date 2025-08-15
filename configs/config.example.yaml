@@ -1,59 +1,48 @@
+schema_version: 1
 app:
-  log_level: ""              # one of: debug, info, warn, error
-  metrics_addr: ":9090"        # optional, empty disables
-  dry_run: false            # don't start real connectors (future use)
+  log_level: info
+  metrics_addr: ":9090"
 
-connectors:
-  rabbitmq:
+routes:
+  - from: rabbit
+    to: [kafka, nats]
+    direction: both
+    filters:
+      - type: drop
+        topics: ["telemetry.*"]
+      - type: minimum
+        topics: ["metric.*"]
+        window: "5s"
+    qos:
+      acks: at_least_once
+      max_inflight: 1000
+    ttl:
+      timeout: "30s"
+      max_hops: 3
+
+rabbit:
+  url: "amqps://user:pass@host/vhost"
+  tls:
     enabled: true
-    url: "amqp://user:pass@localhost:5672/"
-    queue: "bridge.in"
-    prefetch: 200               # >0
-    ttl: "60s"                 # Go duration string
-    tls:
-      enabled: false
-      ca_file: ""
-      cert_file: ""
-      key_file: ""
-      insecure_skip_verify: false
+    insecure_skip_verify: true
 
-  # kafka:
-  #   enabled: true
-  #   brokers: ["localhost:9092"] # at least one
-  #   topic: "bridge.out"
-  #   group: "cfgcheck"
-  #   acks: "all"                  # one of: none, one, all
-  #   linger_ms: 10                 # >=0
-  #   tls:
-  #     enabled: false
-  #     ca_file: ""
-  #     cert_file: ""
-  #     key_file: ""
-  #     insecure_skip_verify: false
 
-  nats:
+kafka:
+  brokers: ["k1:9093","k2:9093"]
+  tls:
     enabled: false
-    url: "nats://localhost:4222"
-    stream: "BRIDGE"
-    subject: "bridge.in"
-    pull_batch: 64               # >0
-    tls:
-      enabled: false
-      ca_file: ""
-      cert_file: ""
-      key_file: ""
-      insecure_skip_verify: false
 
-filters:
-  - name: "drop-empty-payload"
-    type: "drop"                # drop|min
-    match:
-      field: "payload"
-      op: "empty"               # only syntax-checked here
+nats:
+  url: "nats://n1:4222"
+  tls:
+    enabled: false
 
-  - name: "min-score"
-    type: "min"
-    match:
-      field: "headers.score"
-      op: ">="
-      value: 0.7
+persistence:
+  type: badger
+  path: "./data"
+
+protobuf:
+  files: ["./proto/msg.proto"]
+  msg_type: "telemetry.Message"
+
+compression: none
