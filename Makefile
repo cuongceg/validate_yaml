@@ -1,17 +1,13 @@
-BIN := bin/cfgcheck
+.PHONY: build test fmt lint
 
-DEFAULT: run
-.PHONY: build run lint test clean
+build:
+	go build ./...
 
 test:
-	go test -v ./internal/config/
+	go test ./...
 
-build: test
-	@mkdir -p bin
-	GO111MODULE=on go build -o $(BIN) ./cmd/cfgcheck
+fmt:
+	go fmt ./...
 
-run: build
-	./$(BIN) -c ./configs/config.example.yaml --print
-
-clean:
-	rm -rf bin
+run:
+	go run ./cmd/cfgcheck --config configs/config.example.yaml --strict --print-default=false --format=json
