@@ -7,7 +7,7 @@
         "request": "launch",
         "mode": "debug",
         "program": "${workspaceFolder}/cmd/cfgcheck",
-        "args": ["-c", "${workspaceFolder}/configs/config.example.yaml", "--print"],
+        "args": ["--config", "${workspaceFolder}/configs/connectors.yaml"],
         "cwd": "${workspaceFolder}"
       },
       {
