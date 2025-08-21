@@ -1,0 +1,151 @@
+# ========== 1) CONNECTORS ==========
+connectors:
+  - name: kafka_01
+    type: kafka
+    params:
+      brokers: ["kafka-1:9093","kafka-2:9093"]
+    tls:
+      enabled: true
+      ca_file: /etc/ssl/certs/ca.pem
+      # cert_file: /etc/ssl/certs/client.pem
+      # key_file: /etc/ssl/private/client.key
+      insecure_skip_verify: false
+    ingress:
+      - topic: app.input
+        group_id: bridge.ingress.app
+        source_name: kafka.app.input
+    egress:
+      - type: topic
+        topic_template: "bridge.synced.{source_name}"
+
+  - name: nats_core
+    type: nats
+    params:
+      url: "nats://nats:4222"
+    tls:
+      enabled: false
+    ingress:
+      - subject: "bridge.in.>"
+        source_name: nats.bridge.in
+    egress:
+      - type: subject
+        subject_template: "bridge.out.{source_name}"
+
+  - name: rabbit_main
+    type: rabbitmq
+    params:
+      url: "amqps://user:pass@rabbitmq:5671/"
+    tls:
+      enabled: true
+      ca_file: /etc/ssl/certs/ca.pem
+      # cert_file: /etc/ssl/certs/client.pem
+      # key_file: /etc/ssl/private/client.key
+      insecure_skip_verify: false
+    ingress:
+      - queue: orders.inbox
+        source_name: rabbit.orders.inbox
+    egress:
+      - type: exchange
+        exchange: orders
+        kind: topic
+        routing_key_template: "orders.synced.{source_name}"
+
+# ========== 2) FILTER RULES (CEL) ==========
+filters:
+  - name: user_basic
+    expr: 'has(payload.name) && (payload.age > 16 || payload.name.contains("A"))'
+    on_missing_field: drop   # drop | skip | false
+
+  - name: size_le_1mb
+    expr: 'meta.size <= 1048576'
+
+  - name: recent_1h
+    expr: 'meta.createdAtMs >= nowMs() - 3600 * 1000'
+
+# ========== 3) PROJECTIONS (Minimum Payload) ==========
+# - best_effort: true => "có trường nào thì lấy trường đó" (không drop nếu thiếu)
+# - on_missing_field: drop|skip|false (áp dụng khi best_effort=false)
+projections:
+  - name: keep_name_age_best_effort
+    include:
+      - payload.name
+      - payload.age
+    best_effort: true
+
+  - name: keep_name_age_strict
+    include:
+      - payload.name
+      - payload.age
+    best_effort: false
+    on_missing_field: drop
+
+# ========== 4) GROUP RECEIVERS ==========
+group_receivers:
+  - name: grp_sync_all
+    targets:
+      - connector: kafka_01
+        target:
+          type: topic
+          value: "synced.all.{source_name}"
+      - connector: nats_core
+        target:
+          type: subject
+          value: "synced.all.{source_name}"
+      # Target 3: xuất ra Rabbit exchange + routing key
+      - connector: rabbit_main
+        target:
+          type: exchange
+          exchange: orders
+          kind: topic
+          routing_key_template: "synced.all.{source_name}"
+
+  # Ví dụ nhóm chỉ Kafka
+  - name: grp_kafka_hotpath
+    targets:
+      - connector: kafka_01
+        target:
+          type: topic_template
+          value: "hotpath.{source_name}"
+
+# ========== 5) ROUTES ==========
+routes:
+  # 5.1) NHIỀU-VÀO-MỘT: Rabbit nhiều hàng đẩy về 1 topic Kafka
+  - name: rabbit_orders_to_kafka
+    from:
+      connector: rabbit_main
+      source: rabbit.orders.inbox      # trỏ tới source_name ở connector
+    to:
+      connector: kafka_01
+      target:
+        type: topic_template
+        value: "orders.synced.{source_name}"
+    mode:
+      type: persistent                 # <= Người dùng CHỌN mode (yêu cầu của bạn)
+    filters: [user_basic, size_le_1mb, recent_1h]
+    projection: keep_name_age_best_effort
+
+  # 5.2) MỘT-VÀO-NHIỀU: Kafka → nhóm (fan-out nhiều receiver)
+  - name: kafka_app_to_group_all
+    from:
+      connector: kafka_01
+      source: kafka.app.input
+    to_group: grp_sync_all             # dùng group_receiver
+    mode:
+      type: drop
+      ttl_ms: 600000                   # 10 phút
+      max_attempts: 3                  # nếu vượt ngưỡng này thì drop (đúng requirement drop-mode)
+    filters: [user_basic]
+    projection: keep_name_age_strict
+
+  # 5.3) WILDCARD NGUỒN: NATS subject khớp mẫu → nhóm Kafka hotpath
+  - name: nats_bridge_in_to_kafka_hotpath
+    from:
+      connector: nats_core
+      # Cho phép matcher theo pattern public; implementation nội bộ sẽ map pattern này.
+      matcher:
+        subject_like: "bridge.in.>"
+    to_group: grp_kafka_hotpath
+    mode:
+      type: persistent
+    filters: [size_le_1mb, recent_1h]
+    projection: keep_name_age_best_effort
