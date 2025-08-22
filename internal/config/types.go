@@ -1,164 +1,102 @@
 package config
 
-import (
-	"fmt"
-	"time"
-
-	"gopkg.in/yaml.v3"
-)
-
-type Direction string
-
-const (
-	Forward Direction = "forward"
-	Reverse Direction = "reverse"
-	Both    Direction = "both"
-)
-
-func (d *Direction) UnmarshalYAML(fn func(any) error) error {
-	var s string
-	if err := fn(&s); err != nil {
-		return err
-	}
-	v := Direction(s)
-	switch v {
-	case Forward, Reverse, Both:
-		*d = v
-		return nil
-	default:
-		return fmt.Errorf("invalid direction=%q (valid: forward|reverse|both)", s)
-	}
+type UserConfig struct {
+	Connectors     []Connector      `yaml:"connectors"`
+	Filters        []FilterRule     `yaml:"filters,omitempty"`
+	Projections    []ProjectionRule `yaml:"projections,omitempty"`
+	GroupReceivers []GroupReceiver  `yaml:"group_receivers,omitempty"`
+	Routes         []Route          `yaml:"routes"`
 }
 
-type Acks string
-
-const (
-	AtMostOnce  Acks = "at_most_once"
-	AtLeastOnce Acks = "at_least_once"
-)
-
-func (a *Acks) UnmarshalYAML(fn func(any) error) error {
-	var s string
-	if err := fn(&s); err != nil {
-		return err
-	}
-	v := Acks(s)
-	switch v {
-	case AtMostOnce, AtLeastOnce:
-		*a = v
-		return nil
-	default:
-		return fmt.Errorf("invalid qos.acks=%q (valid: at_most_once|at_least_once)", s)
-	}
+type Connector struct {
+	Name    string                 `yaml:"name"`
+	Type    string                 `yaml:"type"` // kafka|nats|rabbitmq
+	Params  map[string]interface{} `yaml:"params"`
+	TLS     *TLSConfig             `yaml:"tls,omitempty"`
+	Ingress []Ingress              `yaml:"ingress,omitempty"`
+	Egress  []Egress               `yaml:"egress,omitempty"`
 }
 
-// Duration wraps time.Duration to parse YAML strings like "300ms", "5s"
-type Duration struct{ time.Duration }
-
-func (d *Duration) UnmarshalYAML(fn func(any) error) error {
-	var s string
-	if err := fn(&s); err != nil {
-		return err
-	}
-	dd, err := time.ParseDuration(s)
-	if err != nil {
-		return fmt.Errorf("invalid duration %q: %w", s, err)
-	}
-	d.Duration = dd
-	return nil
-}
-
-func (d Duration) MarshalYAML() (any, error) {
-	return d.Duration.String(), nil
-}
-
-type TLSBlock struct {
+type TLSConfig struct {
 	Enabled            bool   `yaml:"enabled"`
-	CAFile             string `yaml:"ca_file"`
-	CertFile           string `yaml:"cert_file"`
-	KeyFile            string `yaml:"key_file"`
-	InsecureSkipVerify bool   `yaml:"insecure_skip_verify"`
+	CAFile             string `yaml:"ca_file,omitempty"`
+	CertFile           string `yaml:"cert_file,omitempty"`
+	KeyFile            string `yaml:"key_file,omitempty"`
+	InsecureSkipVerify bool   `yaml:"insecure_skip_verify,omitempty"`
 }
 
-type QoS struct {
-	Acks        Acks `yaml:"acks"`
-	MaxInflight int  `yaml:"max_inflight"`
+type Ingress struct {
+	Topic      string `yaml:"topic,omitempty"`
+	Queue      string `yaml:"queue,omitempty"`
+	Subject    string `yaml:"subject,omitempty"`
+	GroupID    string `yaml:"group_id,omitempty"`
+	SourceName string `yaml:"source_name"` // tên logic để map route
 }
 
-type TTL struct {
-	Timeout Duration `yaml:"timeout"`
-	MaxHops int      `yaml:"max_hops"`
+type Egress struct {
+	Type               string `yaml:"type"` // topic|exchange|subject
+	Name               string `yaml:"name"`
+	TopicTemplate      string `yaml:"topic_template,omitempty"`
+	SubjectTemplate    string `yaml:"subject_template,omitempty"`
+	Exchange           string `yaml:"exchange,omitempty"`
+	Kind               string `yaml:"kind,omitempty"`
+	RoutingKeyTemplate string `yaml:"routing_key_template,omitempty"`
 }
 
-type FilterConfig struct {
-	Type   string   `yaml:"type"` // drop|minium
-	Topics []string `yaml:"topics"`
-	Window Duration `yaml:"window"` // chỉ dùng cho minimum
+type FilterRule struct {
+	Name           string `yaml:"name"`
+	Expr           string `yaml:"expr"`
+	OnMissingField string `yaml:"on_missing_field,omitempty"` // drop|skip|false
+}
+
+type ProjectionRule struct {
+	Name           string   `yaml:"name"`
+	Include        []string `yaml:"include"`
+	BestEffort     bool     `yaml:"best_effort,omitempty"`
+	OnMissingField string   `yaml:"on_missing_field,omitempty"` // drop|skip|false
+}
+
+type GroupReceiver struct {
+	Name    string          `yaml:"name"`
+	Targets []RouteEndpoint `yaml:"targets"`
+}
+
+type ReceiverTarget struct {
+	Connector string       `yaml:"connector"`
+	Target    TargetConfig `yaml:"target"`
+}
+
+type TargetConfig struct {
+	Type               string `yaml:"type"` // topic_template|subject_template|exchange
+	Value              string `yaml:"value,omitempty"`
+	Exchange           string `yaml:"exchange,omitempty"`
+	Kind               string `yaml:"kind,omitempty"`
+	RoutingKeyTemplate string `yaml:"routing_key_template,omitempty"`
 }
 
 type Route struct {
-	From      string         `yaml:"from"` // rabbit|kafka|nats
-	To        []string       `yaml:"to"`
-	Direction Direction      `yaml:"direction"`
-	Filters   []FilterConfig `yaml:"filters"`
-	QoS       QoS            `yaml:"qos"`
-	TTL       TTL            `yaml:"ttl"`
+	Name       string          `yaml:"name"`
+	From       RouteStartpoint `yaml:"from"`
+	To         *RouteEndpoint  `yaml:"to,omitempty"`
+	ToGroup    string          `yaml:"to_group,omitempty"`
+	Mode       RouteMode       `yaml:"mode"`
+	Filters    []string        `yaml:"filters,omitempty"`    // tham chiếu theo tên filter
+	Projection string          `yaml:"projection,omitempty"` // tham chiếu theo tên projection
 }
 
-type RabbitConfig struct {
-	URL string   `yaml:"url"`
-	TLS TLSBlock `yaml:"tls"`
+type RouteStartpoint struct {
+	Connector string `yaml:"connector"`
+	Source    string `yaml:"source,omitempty"`
+	Target    string `yaml:"target,omitempty"`
 }
 
-type KafkaConfig struct {
-	Brokers []string `yaml:"brokers"`
-	TLS     TLSBlock `yaml:"tls"`
+type RouteEndpoint struct {
+	Connector string `yaml:"connector"`
+	Target    string `yaml:"target,omitempty"`
 }
 
-type NATSConfig struct {
-	URL string   `yaml:"url"`
-	TLS TLSBlock `yaml:"tls"`
-}
-
-type Persistence struct {
-	Type string `yaml:"type"` // badger|bolt|none
-	Path string `yaml:"path"`
-}
-
-type ProtobufConfig struct {
-	Files   []string `yaml:"files"`
-	MsgType string   `yaml:"msg_type"`
-}
-
-type AppConfig struct {
-	LogLevel    string `yaml:"log_level"`
-	MetricsAddr string `yaml:"metrics_addr"`
-}
-
-type Config struct {
-	SchemaVersion int            `yaml:"schema_version"`
-	App           AppConfig      `yaml:"app"`
-	Routes        []Route        `yaml:"routes"`
-	Rabbit        RabbitConfig   `yaml:"rabbit"`
-	Kafka         KafkaConfig    `yaml:"kafka"`
-	NATS          NATSConfig     `yaml:"nats"`
-	Persistence   Persistence    `yaml:"persistence"`
-	Protobuf      ProtobufConfig `yaml:"protobuf"`
-	Compression   string         `yaml:"compression"` // none|snappy|zstd
-}
-
-// Helper to provide YAML KnownFields decoding:
-func decodeYAMLStrict(data []byte, out any, strict bool) error {
-	var n yaml.Node
-	if err := yaml.Unmarshal(data, &n); err != nil {
-		return err
-	}
-	// dec := yaml.Decoder{
-	// 	KnownFields: strict,
-	// }
-	// yaml.v3 không có struct public để set KnownFields trên Decoder ctor,
-	// nên dùng cách thủ công:
-	d := yaml.NewDecoder(bytesReader(data))
-	d.KnownFields(strict)
-	return d.Decode(out)
+type RouteMode struct {
+	Type        string `yaml:"type"` // persistent|drop
+	TTLms       int64  `yaml:"ttl_ms,omitempty"`
+	MaxAttempts int    `yaml:"max_attempts,omitempty"`
 }
