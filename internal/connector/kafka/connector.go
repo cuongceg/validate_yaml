@@ -1,0 +1,86 @@
+package kafka
+
+import (
+	"context"
+	"time"
+
+	"github.com/cuongceg/validate_yaml/internal/core"
+	kafka "github.com/segmentio/kafka-go"
+)
+
+type Connector struct {
+	cfg     Config
+	dialer  *kafka.Dialer
+	readers map[string]*kafka.Reader // map[GroupID]*Reader
+	writers map[string]*kafka.Writer
+	ing     []core.Ingress
+	eg      []core.Egress
+}
+
+func NewKafkaConnector(raw any) (core.Connector, error) {
+	cfg := raw.(Config)
+	c := &Connector{
+		cfg:     cfg,
+		writers: make(map[string]*kafka.Writer),
+	}
+	for _, ic := range cfg.Ingresses {
+		c.ing = append(c.ing, &kafkaIngress{cfg: ic, parent: c})
+	}
+	for _, ec := range cfg.Egresses {
+		c.eg = append(c.eg, &kafkaEgress{cfg: ec, parent: c})
+	}
+	return c, nil
+}
+
+func (c *Connector) Open(ctx context.Context) error {
+	// Dialer dùng chung: TLS/SASL, timeouts
+	c.dialer = &kafka.Dialer{
+		Timeout:  10 * time.Second,
+		ClientID: c.cfg.ClientID,
+		//TODO: TLS & SASL config
+	}
+
+	// Tạo Readers theo ingress (Group consumer)
+	for _, ic := range c.cfg.Ingresses {
+		r := kafka.NewReader(kafka.ReaderConfig{
+			Brokers:         c.cfg.Brokers,
+			GroupID:         ic.GroupID, // dùng consumer group
+			Topic:           ic.Topic,   // 1 reader/1 topic
+			Dialer:          c.dialer,
+			MinBytes:        1e3,
+			MaxBytes:        10e6,
+			ReadLagInterval: -1,
+		})
+		c.readers[ic.SourceName] = r
+	}
+
+	for _, ec := range c.cfg.Egresses {
+		if _, ok := c.writers[ec.Topic]; !ok {
+			c.writers[ec.Topic] = &kafka.Writer{
+				Addr:                   kafka.TCP(c.cfg.Brokers...),
+				Topic:                  ec.Topic,
+				Balancer:               &kafka.Hash{}, // hoặc LeastBytes, RoundRobin
+				AllowAutoTopicCreation: false,
+				BatchTimeout:           10 * time.Millisecond,
+				BatchBytes:             128 << 10,
+			}
+		}
+	}
+	return nil
+}
+
+func (c *Connector) Close() error {
+	for _, r := range c.readers {
+		_ = r.Close()
+	}
+	for _, w := range c.writers {
+		_ = w.Close()
+	}
+	return nil
+}
+
+func (c *Connector) Name() string {
+	return c.cfg.Name
+}
+func (c *Connector) Ingresses() []core.Ingress { return c.ing }
+func (c *Connector) Egresses() []core.Egress   { return c.eg }
