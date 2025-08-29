@@ -1,4 +1,4 @@
-.PHONY: build test fmt lint
+.PHONY: build test fmt lint example-config run
 
 build:
 	go build ./...
@@ -9,5 +9,8 @@ test:
 fmt:
 	go fmt ./...
 
+example-config:
+	go run ./cmd/cfgcheck --config configs/user_configs.yaml --example true
+
 run:
-	go run ./cmd/cfgcheck --config configs/config.example.yaml --strict --print-default=false --format=json
+	go run ./cmd/cfgcheck --config configs/user_configs.yaml
