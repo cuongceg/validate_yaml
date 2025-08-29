@@ -23,6 +23,8 @@ func NewKafkaConnector(raw any) (core.Connector, error) {
 		cfg:     cfg,
 		writers: make(map[string]*kafka.Writer),
 	}
+	c.readers = make(map[string]*kafka.Reader, len(cfg.Ingresses))
+	c.writers = make(map[string]*kafka.Writer, len(cfg.Egresses))
 	for _, ic := range cfg.Ingresses {
 		c.ing = append(c.ing, &kafkaIngress{cfg: ic, parent: c})
 	}
