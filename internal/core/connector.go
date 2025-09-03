@@ -6,7 +6,7 @@ type Handler func(ctx context.Context, msg []byte, meta map[string]string) error
 
 type Connector interface {
 	Name() string
-	Open(ctx context.Context) error
+	Open() error
 	Close() error
 	Ingresses() []Ingress
 	Egresses() []Egress

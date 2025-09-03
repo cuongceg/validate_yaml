@@ -1,7 +1,7 @@
 package kafka
 
 import (
-	"context"
+	"fmt"
 	"time"
 
 	"github.com/cuongceg/validate_yaml/internal/core"
@@ -34,7 +34,7 @@ func NewKafkaConnector(raw any) (core.Connector, error) {
 	return c, nil
 }
 
-func (c *Connector) Open(ctx context.Context) error {
+func (c *Connector) Open() error {
 	// Dialer dùng chung: TLS/SASL, timeouts
 	c.dialer = &kafka.Dialer{
 		Timeout:  10 * time.Second,
@@ -72,13 +72,15 @@ func (c *Connector) Open(ctx context.Context) error {
 }
 
 func (c *Connector) Close() error {
+	var err error
 	for _, r := range c.readers {
-		_ = r.Close()
+		err = r.Close()
 	}
 	for _, w := range c.writers {
-		_ = w.Close()
+		err = w.Close()
 	}
-	return nil
+	fmt.Printf("Kafka %q connector closed\n", c.cfg.Name)
+	return err
 }
 
 func (c *Connector) Name() string {

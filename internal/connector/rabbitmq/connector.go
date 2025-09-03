@@ -32,7 +32,7 @@ func (c *Connector) Name() string {
 	return c.cfg.Name
 }
 
-func (c *Connector) Open(ctx context.Context) error {
+func (c *Connector) Open() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.opened {
@@ -98,16 +98,19 @@ func (c *Connector) Close() error {
 	for _, e := range c.eg {
 		if err := e.Close(); err != nil && firstErr == nil {
 			firstErr = err
+			fmt.Printf("Error closing egress: %v\n", err)
 		}
 	}
 	c.eg = nil
-
 	// Dừng/đóng ingress
 	for _, i := range c.ing {
-		_ = i.Stop(context.Background())
+		err := i.Stop(context.Background())
+		if err != nil && firstErr == nil {
+			firstErr = err
+			fmt.Printf("Error stopping ingress: %v\n", err)
+		}
 	}
 	c.ing = nil
-
 	if c.ch != nil {
 		if err := c.ch.Close(); err != nil && firstErr == nil {
 			firstErr = err
@@ -121,6 +124,7 @@ func (c *Connector) Close() error {
 		c.conn = nil
 	}
 	c.opened = false
+	fmt.Printf("RabbitMQ %q connector closed\n", c.cfg.Name)
 	return firstErr
 }
 

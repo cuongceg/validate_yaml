@@ -30,7 +30,7 @@ func NewConnector(cfg ConnectorConfig) *NATSConnector {
 
 func (c *NATSConnector) Name() string { return c.cfg.Name }
 
-func (c *NATSConnector) Open(ctx context.Context) error {
+func (c *NATSConnector) Open() error {
 	if len(c.cfg.Servers) == 0 {
 		return errors.New("nats servers not configured")
 	}
@@ -113,6 +113,7 @@ func (c *NATSConnector) Close() error {
 	if c.nc != nil {
 		c.nc.Close()
 	}
+	fmt.Printf("NATS %q connector closed\n", c.cfg.Name)
 	return nil
 }
 
