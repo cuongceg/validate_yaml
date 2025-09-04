@@ -4,12 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"strings"
 	"sync"
 	"time"
 
 	cfg "github.com/cuongceg/validate_yaml/internal/config"
+	util "github.com/cuongceg/validate_yaml/internal/util"
 )
 
 // ====== Message model trung gian ======
@@ -51,19 +51,15 @@ type FilterFn func(ctx context.Context, msg *Message, obj map[string]any) (bool,
 type ProjectFn func(ctx context.Context, msg *Message, obj map[string]any) (map[string]any, error)
 
 type Engine struct {
-	Buses          map[string]Bus          // key = connector name
-	CodecsBySource map[string]PayloadCodec // key = from.source (source_name)
-	Filters        map[string]FilterFn     // key = filter name
-	Projections    map[string]ProjectFn    // key = projection name
-	Logf           func(format string, args ...any)
+	Buses          map[string]Bus       // key = connector name
+	CodecsBySource PayloadCodec         // key = from.source (source_name)
+	Filters        map[string]FilterFn  // key = filter name
+	Projections    map[string]ProjectFn // key = projection name
+	Logger         func(format string, args ...any)
 }
 
 func (e *Engine) logf(format string, args ...any) {
-	if e.Logf != nil {
-		e.Logf(format, args...)
-	} else {
-		log.Printf(format, args...)
-	}
+	util.App.Printf(format, args...)
 }
 
 // ====== Khởi chạy tất cả routes theo YAML ======
@@ -114,10 +110,9 @@ func (e *Engine) StartRoutes(ctx context.Context, uc *cfg.UserConfig) (stop func
 			return nil, fmt.Errorf("route %q: connector %q not found", r.Name, fromConn)
 		}
 
-		// Chọn codec theo source_name
 		var codec PayloadCodec
 		if e.CodecsBySource != nil {
-			codec = e.CodecsBySource[fromSrc]
+			codec = e.CodecsBySource
 		}
 
 		// Chuẩn bị filter chain
@@ -181,6 +176,7 @@ func (e *Engine) StartRoutes(ctx context.Context, uc *cfg.UserConfig) (stop func
 				}
 				in.Meta["source_name"] = fromSrc
 				in.Meta["size"] = len(in.Value)
+				in.Meta["content_type"] = codec.ContentType()
 
 				// Filters
 				for _, f := range filters {
@@ -220,12 +216,11 @@ func (e *Engine) StartRoutes(ctx context.Context, uc *cfg.UserConfig) (stop func
 					// retry theo maxAttempts nếu mode persistent
 					for {
 						if err := outBus.Publish(ctx, t.Target, in); err != nil {
-							e.logf("[route=%s] publish error to %s/%s: %v", routeName, t.Connector, t.Target, err)
-
 							if mode == "persistent" {
 								time.Sleep(100 * time.Millisecond)
 								continue
 							} else if mode == "drop" {
+								e.logf("[route=%s] publish error to %s/%s: %v", routeName, t.Connector, t.Target, err)
 								if ttlMs > 0 {
 									created, _ := getInt64(in.Meta, "createdAtMs")
 									if created > 0 && (time.Now().UnixMilli()-created) > ttlMs {
