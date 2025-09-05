@@ -2,7 +2,6 @@ package router
 
 import (
 	"context"
-	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -30,7 +29,6 @@ func BuiltinFilters() map[string]FilterFn {
 		},
 		// expr: 'has(payload.name) && (payload.age > 16 || payload.name.contains("A"))'
 		"user_basic": func(ctx context.Context, msg *Message, obj map[string]any) (bool, error) {
-			fmt.Printf("DEBUG: user_basic: obj=%#v\n", obj)
 			if obj == nil {
 				return false, nil
 			}
@@ -56,8 +54,6 @@ func BuiltinFilters() map[string]FilterFn {
 	}
 }
 
-// Projection: chỉ lấy 1 số trường cần thiết (best-effort hoặc strict).
-// Ở đây demo 2 projection trùng tên YAML
 func BuiltinProjections() map[string]ProjectFn {
 	return map[string]ProjectFn{
 		"keep_name_age_best_effort": func(ctx context.Context, msg *Message, obj map[string]any) (map[string]any, error) {

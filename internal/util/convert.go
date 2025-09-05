@@ -1,7 +1,6 @@
-package core
+package util
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -25,7 +24,7 @@ func decodeParams[T any](m map[string]interface{}) (T, error) {
 	return zero, nil
 }
 
-func MapConnectors(ctx context.Context, uc *config.UserConfig) (map[string]core.Connector, error) {
+func MapConnectors(uc *config.UserConfig) (map[string]core.Connector, error) {
 	conns := make(map[string]core.Connector, len(uc.Connectors))
 
 	for _, c := range uc.Connectors {
@@ -77,7 +76,7 @@ func MapConnectors(ctx context.Context, uc *config.UserConfig) (map[string]core.
 				return nil, fmt.Errorf("connector %q: build: %w", c.Name, err)
 			}
 
-			if err := conn.Open(ctx); err != nil {
+			if err := conn.Open(); err != nil {
 				return nil, fmt.Errorf("connector %q: open: %w", c.Name, err)
 			}
 			conns[c.Name] = conn
@@ -127,7 +126,7 @@ func MapConnectors(ctx context.Context, uc *config.UserConfig) (map[string]core.
 			if err != nil {
 				return nil, fmt.Errorf("connector %q: build: %w", c.Name, err)
 			}
-			if err := conn.Open(ctx); err != nil {
+			if err := conn.Open(); err != nil {
 				return nil, fmt.Errorf("connector %q: open: %w", c.Name, err)
 			}
 			conns[c.Name] = conn

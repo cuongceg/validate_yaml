@@ -70,13 +70,7 @@ func (e *Engine) StartRoutes(ctx context.Context, uc *cfg.UserConfig) (stop func
 
 	// defaults
 	lanes := e.LanesPerTarget
-	if lanes <= 0 {
-		lanes = 8
-	}
 	laneBuf := e.LaneBuffer
-	if laneBuf <= 0 {
-		laneBuf = 20000
-	}
 
 	// Map group_receivers
 	type toTarget struct{ Connector, Target string }
@@ -113,32 +107,32 @@ func (e *Engine) StartRoutes(ctx context.Context, uc *cfg.UserConfig) (stop func
 			return nil, fmt.Errorf("route %q: connector %q not found", r.Name, fromConn)
 		}
 
-		// var codec PayloadCodec
-		// if e.CodecsBySource != nil {
-		// 	codec = e.CodecsBySource
-		// }
+		var codec PayloadCodec
+		if e.CodecsBySource != nil {
+			codec = e.CodecsBySource
+		}
 
-		// // Filters
-		// var filterFns []FilterFn
-		// for _, name := range r.Filters {
-		// 	if f, ok := e.Filters[name]; ok {
-		// 		filterFns = append(filterFns, f)
-		// 	} else {
-		// 		cancel()
-		// 		return nil, fmt.Errorf("route %q: filter %q not registered", r.Name, name)
-		// 	}
-		// }
+		// Filters
+		var filterFns []FilterFn
+		for _, name := range r.Filters {
+			if f, ok := e.Filters[name]; ok {
+				filterFns = append(filterFns, f)
+			} else {
+				cancel()
+				return nil, fmt.Errorf("route %q: filter %q not registered", r.Name, name)
+			}
+		}
 
-		// // Projection
-		// var project ProjectFn
-		// if r.Projection != "" {
-		// 	p, ok := e.Projections[r.Projection]
-		// 	if !ok {
-		// 		cancel()
-		// 		return nil, fmt.Errorf("route %q: projection %q not registered", r.Name, r.Projection)
-		// 	}
-		// 	project = p
-		// }
+		// Projection
+		var project ProjectFn
+		if r.Projection != "" {
+			p, ok := e.Projections[r.Projection]
+			if !ok {
+				cancel()
+				return nil, fmt.Errorf("route %q: projection %q not registered", r.Name, r.Projection)
+			}
+			project = p
+		}
 
 		// Mode
 		mode := strings.ToLower(r.Mode.Type) // "persistent" | "drop" | ...
@@ -226,52 +220,52 @@ func (e *Engine) StartRoutes(ctx context.Context, uc *cfg.UserConfig) (stop func
 			// 3) CHỜ all targets ok -> return nil -> ingress commit offset
 			if err := inBus.Subscribe(ctx, fromSrc, func(ctx context.Context, in *Message) error {
 				// Decode (nếu có)
-				// var obj map[string]any
-				// var domain any
-				// var err error
-				// if codec != nil && len(in.Value) > 0 {
-				// 	obj, domain, err = codec.Decode(in.Value)
-				// 	if err != nil {
-				// 		e.logf("[route=%s] decode error: %v", routeName, err)
-				// 		return fmt.Errorf("decode failed: %w", err)
-				// 	}
-				// }
-				// // meta
-				// if in.Meta == nil {
-				// 	in.Meta = map[string]any{}
-				// }
-				// in.Meta["source_name"] = fromSrc
-				// in.Meta["size"] = len(in.Value)
-				// if codec != nil {
-				// 	in.Meta["content_type"] = codec.ContentType()
-				// }
+				var obj map[string]any
+				var domain any
+				var err error
+				if codec != nil && len(in.Value) > 0 {
+					obj, domain, err = codec.Decode(in.Value)
+					if err != nil {
+						e.logf("[route=%s] decode error: %v", routeName, err)
+						return fmt.Errorf("decode failed: %w", err)
+					}
+				}
+				// meta
+				if in.Meta == nil {
+					in.Meta = map[string]any{}
+				}
+				in.Meta["source_name"] = fromSrc
+				in.Meta["size"] = len(in.Value)
+				if codec != nil {
+					in.Meta["content_type"] = codec.ContentType()
+				}
 
-				// // filter
-				// for _, f := range filterFns {
-				// 	ok, ferr := f(ctx, in, obj)
-				// 	if ferr != nil {
-				// 		e.logf("[route=%s] filter error: %v", routeName, ferr)
-				// 		return ferr
-				// 	}
-				// 	if !ok {
-				// 		return fmt.Errorf("filtered")
-				// 	}
-				// }
+				// filter
+				for _, f := range filterFns {
+					ok, ferr := f(ctx, in, obj)
+					if ferr != nil {
+						e.logf("[route=%s] filter error: %v", routeName, ferr)
+						return ferr
+					}
+					if !ok {
+						return fmt.Errorf("filtered")
+					}
+				}
 
-				// // projection
-				// if project != nil && codec != nil {
-				// 	newObj, perr := project(ctx, in, obj)
-				// 	if perr != nil {
-				// 		e.logf("[route=%s] projection error: %v", routeName, perr)
-				// 		return perr
-				// 	}
-				// 	enc, eerr := codec.Encode(newObj, domain)
-				// 	if eerr != nil {
-				// 		e.logf("[route=%s] encode error: %v", routeName, eerr)
-				// 		return eerr
-				// 	}
-				// 	in.Value = enc
-				// }
+				// projection
+				if project != nil && codec != nil {
+					newObj, perr := project(ctx, in, obj)
+					if perr != nil {
+						e.logf("[route=%s] projection error: %v", routeName, perr)
+						return perr
+					}
+					enc, eerr := codec.Encode(newObj, domain)
+					if eerr != nil {
+						e.logf("[route=%s] encode error: %v", routeName, eerr)
+						return eerr
+					}
+					in.Value = enc
+				}
 
 				// Publish tới tất cả targets qua lanes và CHỜ kết quả,
 				// để đảm bảo commit offset chỉ sau khi downstream OK.
