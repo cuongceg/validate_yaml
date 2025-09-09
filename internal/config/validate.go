@@ -246,6 +246,10 @@ func validateRoutesEndpoints(cfg *UserConfig) error {
 					if !egressIdx[egressKey{r.To.Connector, r.To.Target}] {
 						errs = append(errs, fmt.Errorf("routes[%d].to: target %q not found in connector %q", i, r.To.Target, r.To.Connector))
 					}
+
+					if r.To.Connector == r.From.Connector && r.To.Target == r.From.Source {
+						errs = append(errs, fmt.Errorf("routes[%d]: cannot route from and to the same source/target", i))
+					}
 				}
 			}
 		}
@@ -258,7 +262,6 @@ func validateRoutesEndpoints(cfg *UserConfig) error {
 		// mode
 		switch strings.ToLower(r.Mode.Type) {
 		case "persistent":
-			// ok
 		case "drop":
 			route := &cfg.Routes[i]
 			if route.Mode.TTLms <= 0 {
@@ -338,26 +341,6 @@ func requireKafkaParams(idx int, c *Connector) error {
 		}
 	default:
 		return fmt.Errorf("connectors[%d] %q: params.brokers must be []string", idx, c.Name)
-	}
-	return nil
-}
-
-func validateTargetConfig(gi, tj int, t *TargetConfig) error {
-	switch strings.ToLower(t.Type) {
-	case "topic_template":
-		if strings.TrimSpace(t.Value) == "" {
-			return fmt.Errorf("group_receivers[%d].targets[%d]: type=topic_template requires value", gi, tj)
-		}
-	case "subject_template":
-		if strings.TrimSpace(t.Value) == "" {
-			return fmt.Errorf("group_receivers[%d].targets[%d]: type=subject_template requires value", gi, tj)
-		}
-	case "exchange":
-		if strings.TrimSpace(t.Exchange) == "" || strings.TrimSpace(t.RoutingKeyTemplate) == "" {
-			return fmt.Errorf("group_receivers[%d].targets[%d]: type=exchange requires exchange and routing_key_template", gi, tj)
-		}
-	default:
-		return fmt.Errorf("group_receivers[%d].targets[%d]: unsupported target type %q", gi, tj, t.Type)
 	}
 	return nil
 }
