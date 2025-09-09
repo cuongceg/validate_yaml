@@ -56,7 +56,7 @@ func MapConnectors(uc *config.UserConfig) (map[string]core.Connector, error) {
 					Exchange:           eg.Exchange,
 					RoutingKey:         eg.RoutingKeyTemplate, // nếu là template, bạn có thể render ở tầng route
 					Persistent:         true,
-					DefaultContentType: "application/octet-stream",
+					DefaultContentType: "application/x-protobuf",
 					PublishTimeout:     5 * time.Second,
 				})
 			}
