@@ -42,10 +42,8 @@ func (b *busAdapter) Subscribe(ctx context.Context, sourceName string, h func(co
 	return ing.Start(ctx, func(c context.Context, payload []byte, meta map[string]string) error {
 		// Chuyển sang router.Message
 		msg := &Message{
-			Key:     nil,            // Connector của bạn không có key — để nil
-			Value:   payload,        // giữ nguyên bytes
-			Headers: nil,            // không có headers — để nil
-			Meta:    toAnyMap(meta), // map[string]string -> map[string]any
+			Value: payload,        // giữ nguyên bytes
+			Meta:  toAnyMap(meta), // map[string]string -> map[string]any
 		}
 		return h(c, msg)
 	})
