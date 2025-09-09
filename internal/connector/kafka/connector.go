@@ -20,8 +20,7 @@ type Connector struct {
 func NewKafkaConnector(raw any) (core.Connector, error) {
 	cfg := raw.(Config)
 	c := &Connector{
-		cfg:     cfg,
-		writers: make(map[string]*kafka.Writer),
+		cfg: cfg,
 	}
 	c.readers = make(map[string]*kafka.Reader, len(cfg.Ingresses))
 	c.writers = make(map[string]*kafka.Writer, len(cfg.Egresses))
@@ -46,12 +45,14 @@ func (c *Connector) Open() error {
 	for _, ic := range c.cfg.Ingresses {
 		r := kafka.NewReader(kafka.ReaderConfig{
 			Brokers:         c.cfg.Brokers,
-			GroupID:         ic.GroupID, // dùng consumer group
-			Topic:           ic.Topic,   // 1 reader/1 topic
+			GroupID:         ic.GroupID,
+			Topic:           ic.Topic,
 			Dialer:          c.dialer,
 			MinBytes:        1e3,
 			MaxBytes:        10e6,
-			ReadLagInterval: -1,
+			MaxWait:         10 * time.Millisecond,
+			QueueCapacity:   100000,
+			ReadLagInterval: 0,
 		})
 		c.readers[ic.SourceName] = r
 	}
