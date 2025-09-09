@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strconv"
+	"sync"
 
 	"github.com/cuongceg/validate_yaml/internal/core"
 	kafka "github.com/segmentio/kafka-go"
@@ -29,30 +29,33 @@ func (i *kafkaIngress) Start(ctx context.Context, h core.Handler) error {
 	if r == nil {
 		return fmt.Errorf("reader not found for topic %s", i.cfg.Topic)
 	}
-
-	go func() {
-		for {
-			m, err := r.FetchMessage(ctx)
-			if err != nil {
-				if errors.Is(err, context.Canceled) {
-					return
+	wg := &sync.WaitGroup{}
+	wg.Add(10)
+	for j := 0; j < 10; j++ {
+		go func() {
+			defer wg.Done()
+			for {
+				m, err := r.FetchMessage(ctx)
+				if err != nil {
+					if errors.Is(err, context.Canceled) {
+						return
+					}
+					// log & tiếp tục
+					continue
 				}
-				// log & tiếp tục
-				continue
+				meta := map[string]string{}
+				for _, v := range m.Headers {
+					meta[v.Key] = string(v.Value)
+				}
+				// Handler sẽ CHỈ trả nil sau khi publish RabbitMQ OK (router đảm nhiệm)
+				if err := h(ctx, m.Value, meta); err == nil {
+					_ = r.CommitMessages(ctx, m) // commit offset sau khi downstream OK
+				} else {
+					// tùy chính sách: không commit để retry
+				}
 			}
-			meta := map[string]string{
-				"topic":     m.Topic,
-				"partition": strconv.Itoa(m.Partition),
-				"offset":    strconv.FormatInt(m.Offset, 10),
-				"key":       string(m.Key),
-			}
-			if err := h(ctx, m.Value, meta); err == nil {
-				_ = r.CommitMessages(ctx, m) // commit offset
-			} else {
-				// tuỳ chính sách: không commit để retry
-			}
-		}
-	}()
+		}()
+	}
 	return nil
 }
 
