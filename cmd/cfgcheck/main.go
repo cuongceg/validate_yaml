@@ -4,7 +4,6 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"log"
 	"os"
 	"os/signal"
 	"syscall"
@@ -13,6 +12,7 @@ import (
 	"github.com/cuongceg/validate_yaml/internal/router"
 	util "github.com/cuongceg/validate_yaml/internal/util"
 	"github.com/cuongceg/validate_yaml/proto/pb"
+	"github.com/redis/go-redis/v9"
 )
 
 func main() {
@@ -28,29 +28,33 @@ func main() {
 		os.Exit(0)
 	}
 
+	util.Init()
+
 	userCfg, err := config.Load(path)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "❌ %v\n", err)
 		os.Exit(1)
 	}
 
-	ctx := context.Background()
-	connectors, err := util.MapConnectors(ctx, userCfg)
+	connectors, err := util.MapConnectors(userCfg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "❌ %v\n", err)
 		os.Exit(1)
 	}
 	defer func() {
 		for _, c := range connectors {
-			_ = c.Close()
+			err = c.Close()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "❌ close connector %s: %v\n", c.Name(), err)
+			}
 		}
 	}()
 
-	fmt.Println("✅ Valid configuration & connectors created.")
+	util.App.Println("✅ Valid configuration & connectors created.")
 
 	buses := make(map[string]router.Bus, len(connectors))
 	for name, c := range connectors {
-		b, err := router.NewBusFromConnector(c) // dùng interface Connector/Ingress/Egress bạn đã định nghĩa
+		b, err := router.NewBusFromConnector(c)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "❌ build bus for %s: %v\n", name, err)
 			os.Exit(1)
@@ -58,20 +62,35 @@ func main() {
 		buses[name] = b
 	}
 
-	codecs := map[string]router.PayloadCodec{
-		"kafka.app.input": router.NewProtoCodec[*pb.Envelope](),
-		// "rabbit.orders.inbox": router.NewProtoCodec[*pb.OrderV2](),
-		// "nats.bridge.in":      router.NewProtoCodec[*pb.Whatever](),
-	}
+	codecs := router.NewProtoCodec[*pb.Envelope]()
 
 	eng := &router.Engine{
 		Buses:          buses,
 		CodecsBySource: codecs,
-		Filters:        router.BuiltinFilters(),     // có sẵn size_le_1mb, recent_1h, user_basic
-		Projections:    router.BuiltinProjections(), // có sẵn keep_name_age_* (best_effort/strict)
+		Filters:        router.BuiltinFilters(),
+		Projections:    router.BuiltinProjections(),
+		LanesPerTarget: 16,
+		LaneBuffer:     20000,
 	}
 
-	stop, err := eng.StartRoutes(ctx, userCfg)
+	ctx, stopSignals := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stopSignals()
+
+	// Connect to Redis
+	rdb := redis.NewClient(&redis.Options{
+		Addr:         "127.0.0.1:6379",
+		Password:     "", // nếu có requirepass thì đặt ở đây
+		DB:           0,
+		MinIdleConns: 4,
+		PoolSize:     32,
+	})
+
+	if err := rdb.Ping(ctx).Err(); err != nil {
+		panic(err)
+	}
+	util.App.Println("Connected to Redis")
+
+	stop, err := eng.StartRoutes(ctx, userCfg, rdb)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "❌ start routes: %v\n", err)
 		os.Exit(1)
@@ -80,14 +99,9 @@ func main() {
 
 	fmt.Println("🚚 Routes running… Press Ctrl+C to stop.")
 
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	select {
-	case <-sigCh:
-		log.Println("signal received, shutting down…")
-	case <-ctx.Done():
-		log.Println("context canceled, shutting down…")
-	}
+	// ✅ Chờ context bị hủy bởi tín hiệu
+	<-ctx.Done()
+	fmt.Println("signal received, shutting down…")
 }
 
 func sampleConfig() string {
