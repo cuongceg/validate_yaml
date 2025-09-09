@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"sync/atomic"
-	"time"
 
 	core "github.com/cuongceg/validate_yaml/internal/core"
 	amqp "github.com/rabbitmq/amqp091-go"
@@ -91,7 +90,7 @@ func (i *ingress) Start(ctx context.Context, h core.Handler) error {
 				for k, v := range d.Headers {
 					// chuyển mọi header về string nếu có thể
 					if s, ok := v.(string); ok {
-						meta["hdr."+k] = s
+						meta[k] = s
 					}
 				}
 
@@ -124,24 +123,24 @@ func (i *ingress) Stop(ctx context.Context) error {
 	if i.stopped.Swap(true) {
 		return nil
 	}
-	// Hủy consumer; nếu chưa cancel trong Start, Cancel tại đây
-	_ = i.ch.Cancel(i.consumerTag, false)
+	// // Hủy consumer; nếu chưa cancel trong Start, Cancel tại đây
+	// _ = i.ch.Cancel(i.consumerTag, false)
 
-	// Đợi goroutine dừng hoặc timeout theo ctx
-	select {
-	case <-i.doneCh:
-	case <-ctx.Done():
-	}
-	// Đóng channel riêng của ingress
-	closeCh := make(chan struct{})
-	go func() {
-		_ = i.ch.Close()
-		close(closeCh)
-	}()
-	select {
-	case <-closeCh:
-	case <-ctx.Done():
-	case <-time.After(2 * time.Second):
-	}
+	// // Đợi goroutine dừng hoặc timeout theo ctx
+	// select {
+	// case <-i.doneCh:
+	// case <-ctx.Done():
+	// }
+	// // Đóng channel riêng của ingress
+	// closeCh := make(chan struct{})
+	// go func() {
+	// 	_ = i.ch.Close()
+	// 	close(closeCh)
+	// }()
+	// select {
+	// case <-closeCh:
+	// case <-ctx.Done():
+	// case <-time.After(2 * time.Second):
+	// }
 	return nil
 }
