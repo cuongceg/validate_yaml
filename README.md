@@ -8,7 +8,7 @@ cd /home/kafka
 curl "https://downloads.apache.org/kafka/2.8.2/kafka_2.13-2.8.2.tgz" -o /home/kafka.tgz
 sudo tar -xvzf /home/kafka.tgz --strip 1
 ```
-- Create service in Ubuntu system
+- Create kafka service in Ubuntu system
 ```
 sudo nano /etc/systemd/system/kafka.service
 
@@ -31,6 +31,36 @@ Restart=on-abnormal
 [Install]
 
 WantedBy=multi-user.target
+```
+- Create zookeeper service in Ubuntu system
+```
+[Unit]
+
+Description=Apache Zookeeper server
+
+Documentation=http://zookeeper.apache.org
+
+Requires=network.target remote-fs.target
+
+After=network.target remote-fs.target
+
+[Service]
+
+Type=simple
+
+ExecStart=/home/domanhcuong/Downloads/bin/zookeeper-server-start.sh /home/domanhcuong/Downloads/config/zookeeper.properties
+
+ExecStop=/home/domanhcuong/Downloads/bin/zookeeper-server-stop.sh
+
+Restart=on-abnormal
+```
+- Start service
+```
+sudo systemctl daemon-reload
+sudo systemctl enable zookeeper
+sudo systemctl start zookeeper
+sudo systemctl enable kafka
+sudo systemctl start kafka 
 ```
 ## Install RabbitMQ on Ubuntu(virtual machine)
 ```
