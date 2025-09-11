@@ -4,21 +4,19 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"hash/fnv"
 	"strings"
 	"sync"
 	"time"
 
 	cfg "github.com/cuongceg/validate_yaml/internal/config"
 	util "github.com/cuongceg/validate_yaml/internal/util"
+	"github.com/redis/go-redis/v9"
 )
 
 // ====== Message model trung gian ======
 type Message struct {
-	Key     []byte
-	Value   []byte
-	Headers map[string]string
-	Meta    map[string]any // size, createdAtMs, source_name, ...
+	Value []byte
+	Meta  map[string]any // size, createdAtMs, source_name, ...
 }
 
 // ====== Bus adapters (trừu tượng hóa connectors) ======
@@ -61,7 +59,7 @@ func (e *Engine) logf(format string, args ...any) {
 	util.App.Printf(format, args...)
 }
 
-func (e *Engine) StartRoutes(ctx context.Context, uc *cfg.UserConfig) (stop func(), err error) {
+func (e *Engine) StartRoutes(ctx context.Context, uc *cfg.UserConfig, rdb *redis.Client) (stop func(), err error) {
 	if e.Buses == nil {
 		return nil, errors.New("router.Engine: Buses is nil")
 	}
@@ -69,8 +67,8 @@ func (e *Engine) StartRoutes(ctx context.Context, uc *cfg.UserConfig) (stop func
 	ctx, cancel := context.WithCancel(ctx)
 
 	// defaults
-	lanes := e.LanesPerTarget
-	laneBuf := e.LaneBuffer
+	lanes := 16
+	laneBuf := 8192
 
 	// Map group_receivers
 	type toTarget struct{ Connector, Target string }
@@ -170,37 +168,29 @@ func (e *Engine) StartRoutes(ctx context.Context, uc *cfg.UserConfig) (stop func
 					defer wg.Done()
 					for j := range q {
 						var err error
-						attempt := 0
+						//attempt := 0
 						for {
 							// Publish blocking; exgress sẽ xử lý confirm/return
 							err = outBus.Publish(ctx, tgt.Target, j.msg)
-							if err == nil {
-								break
-							}
-							// retry theo mode
-							if mode == "persistent" {
-								time.Sleep(100 * time.Millisecond)
-								continue
-							} else if mode == "drop" {
-								if ttlMs > 0 {
-									created, _ := getInt64(j.msg.Meta, "createdAtMs")
-									age := time.Now().UnixMilli() - created
-									if created > 0 && age > ttlMs {
-										err = nil // coi như drop-success để không giữ offset mãi
-										break
-									}
-								}
-								attempt++
-								if maxAttempts > 0 && attempt >= maxAttempts {
-									// hết nỗ lực
-									break
-								}
-								time.Sleep(50 * time.Millisecond)
-								continue
-							} else {
-								// mode khác: một lần là đủ
-								break
-							}
+							break
+							// if err == nil {
+							// 	break
+							// }
+							// if ttlMs > 0 {
+							// 	created, _ := getInt64(j.msg.Meta, "createdAtMs")
+							// 	age := time.Now().UnixMilli() - created
+							// 	if created > 0 && age > ttlMs {
+							// 		err = nil // coi như drop-success để không giữ offset mãi
+							// 		break
+							// 	}
+							// }
+							// attempt++
+							// if maxAttempts > 0 && attempt >= maxAttempts {
+							// 	// hết nỗ lực
+							// 	break
+							// }
+							// time.Sleep(50 * time.Millisecond)
+							// continue
 						}
 						j.done <- err
 					}
@@ -219,7 +209,17 @@ func (e *Engine) StartRoutes(ctx context.Context, uc *cfg.UserConfig) (stop func
 			// 2) gửi job tới đúng lane của từng target
 			// 3) CHỜ all targets ok -> return nil -> ingress commit offset
 			if err := inBus.Subscribe(ctx, fromSrc, func(ctx context.Context, in *Message) error {
-				// Decode (nếu có)
+				//Decode (nếu có)
+				// msg_id, has := in.Meta["msg_id"].(string)
+				// if has {
+				// 	ok, hopErr := util.CheckHop(ctx, rdb, msg_id, fromConn, fromSrc, time.Minute*10)
+				// 	if !ok {
+				// 		e.logf("[route=%s] drop msg_id=%s due to loop hop with error %s", routeName, in.Meta["msg_id"].(string), hopErr)
+				// 		return nil
+				// 	}
+				// } else {
+				// 	e.logf("[route=%s] warning: message without msg_id in meta", routeName)
+				// }
 				var obj map[string]any
 				var domain any
 				var err error
@@ -233,11 +233,6 @@ func (e *Engine) StartRoutes(ctx context.Context, uc *cfg.UserConfig) (stop func
 				// meta
 				if in.Meta == nil {
 					in.Meta = map[string]any{}
-				}
-				in.Meta["source_name"] = fromSrc
-				in.Meta["size"] = len(in.Value)
-				if codec != nil {
-					in.Meta["content_type"] = codec.ContentType()
 				}
 
 				// filter
@@ -276,7 +271,7 @@ func (e *Engine) StartRoutes(ctx context.Context, uc *cfg.UserConfig) (stop func
 					go func(ti int, tgt toTarget) {
 						defer wgPub.Done()
 						j := job{msg: in, done: make(chan error, 1)}
-						li := pickLaneIndex(in.Key, lanes)
+						li := pickLaneIndex(lanes)
 						lanesPerTarget[ti][li] <- j
 						err := <-j.done
 						if err != nil {
@@ -334,14 +329,9 @@ func getInt64(m map[string]any, k string) (int64, bool) {
 	return 0, false
 }
 
-func pickLaneIndex(key []byte, lanes int) int {
+func pickLaneIndex(lanes int) int {
 	if lanes <= 1 {
 		return 0
 	}
-	if len(key) == 0 {
-		return int(time.Now().UnixNano() % int64(lanes))
-	}
-	h := fnv.New32a()
-	_, _ = h.Write(key)
-	return int(h.Sum32() % uint32(lanes))
+	return int(time.Now().UnixNano() % int64(lanes))
 }

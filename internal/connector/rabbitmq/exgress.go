@@ -3,12 +3,21 @@ package rabbitmq
 import (
 	"context"
 	"fmt"
-	"sync"
+
+	//"sync"
+	"sync/atomic"
 	"time"
 
 	core "github.com/cuongceg/validate_yaml/internal/core"
 	amqp "github.com/rabbitmq/amqp091-go"
 )
+
+// Một channel AMQP cho 1 lane publish
+type pubLane struct {
+	ch       *amqp.Channel
+	confirms <-chan amqp.Confirmation
+	//mu       sync.Mutex // tuần tự hóa publish trong lane để mapping confirm đúng msg
+}
 
 type egress struct {
 	targetName         string
@@ -19,32 +28,34 @@ type egress struct {
 	publishTimeout     time.Duration
 
 	conn *amqp.Connection
-	ch   *amqp.Channel
 
-	confirms <-chan amqp.Confirmation
-	returns  <-chan amqp.Return
-
-	mu sync.Mutex // bảo vệ Publish tuần tự trên channel
+	lanes     []pubLane
+	rrCounter uint64 // round-robin chọn lane
 }
 
 func newEgress(conn *amqp.Connection, cfg EgressConfig) (core.Egress, error) {
 	if cfg.TargetName == "" {
 		return nil, fmt.Errorf("egress requires targetName")
 	}
-	ch, err := conn.Channel()
-	if err != nil {
-		return nil, fmt.Errorf("egress channel: %w", err)
-	}
 
-	// Bật publisher confirms
-	if err := ch.Confirm(false); err != nil {
-		_ = ch.Close()
-		return nil, fmt.Errorf("enable confirms: %w", err)
-	}
+	poolSize := 16
 
-	// Đăng ký kênh nhận Return/Confirm
-	rets := ch.NotifyReturn(make(chan amqp.Return, 1))
-	confs := ch.NotifyPublish(make(chan amqp.Confirmation, 1))
+	lanes := make([]pubLane, 0, poolSize)
+	for i := 0; i < poolSize; i++ {
+		ch, err := conn.Channel()
+		if err != nil {
+			return nil, fmt.Errorf("egress channel: %w", err)
+		}
+		if err := ch.Confirm(false); err != nil {
+			_ = ch.Close()
+			return nil, fmt.Errorf("enable confirms: %w", err)
+		}
+		confs := ch.NotifyPublish(make(chan amqp.Confirmation, 2048))
+		lanes = append(lanes, pubLane{
+			ch:       ch,
+			confirms: confs,
+		})
+	}
 
 	return &egress{
 		targetName:         cfg.TargetName,
@@ -54,17 +65,21 @@ func newEgress(conn *amqp.Connection, cfg EgressConfig) (core.Egress, error) {
 		defaultContentType: cfg.DefaultContentType,
 		publishTimeout:     cfg.PublishTimeout,
 		conn:               conn,
-		ch:                 ch,
-		confirms:           confs,
-		returns:            rets,
+		lanes:              lanes,
 	}, nil
 }
 
 func (e *egress) TargetName() string { return e.targetName }
 
+func (e *egress) pickLane() *pubLane {
+	idx := int(atomic.AddUint64(&e.rrCounter, 1) % uint64(len(e.lanes)))
+	return &e.lanes[idx]
+}
+
 func (e *egress) Publish(ctx context.Context, msg []byte, meta map[string]string) error {
-	e.mu.Lock()
-	defer e.mu.Unlock()
+	ln := e.pickLane()
+	// ln.mu.Lock() // giữ FIFO trong lane
+	// defer ln.mu.Unlock()
 
 	// deadline
 	var cancel func()
@@ -73,69 +88,53 @@ func (e *egress) Publish(ctx context.Context, msg []byte, meta map[string]string
 		defer cancel()
 	}
 
-	// content-type
-	ct := e.defaultContentType
-	if v := meta["content-type"]; v != "" {
-		ct = v
-	}
-
-	// headers
 	hdrs := amqp.Table{}
 	for k, v := range meta {
-		if k == "content-type" {
-			continue
-		}
 		hdrs[k] = v
 	}
 
-	// render routing key từ template (nếu có), else dùng nguyên cfg
+	// routing key (tạm: dùng template string sẵn)
 	rk := e.routingKeyTpl
-	// if e.routingKeyTpl != nil {
-	// 	var b bytes.Buffer
-	// 	// meta là map[string]string → truyền luôn
-	// 	if err := e.routingKeyTpl.Execute(&b, meta); err != nil {
-	// 		return fmt.Errorf("render routing key: %w", err)
-	// 	}
-	// 	rk = b.String()
-	// }
 
 	pub := amqp.Publishing{
-		ContentType: ct,
-		Body:        msg,
-		Headers:     hdrs,
-		DeliveryMode: func() uint8 {
-			if e.persistent {
-				return amqp.Persistent
-			}
-			return amqp.Transient
-		}(),
-		// bạn có thể set CorrelationId/ReplyTo nếu cần end-to-end ack
+		ContentType:  "application/x-protobuf",
+		Body:         msg,
+		Headers:      hdrs,
+		DeliveryMode: amqp.Transient,
+		// DeliveryMode: func() uint8 {
+		// 	if e.persistent {
+		// 		return amqp.Persistent
+		// 	}
+		// 	return amqp.Transient
+		// }(),
 	}
 
-	// mandatory=true để nhận Return nếu unroutable
-	if err := e.ch.PublishWithContext(ctx, e.exchange, rk, true, false, pub); err != nil {
-		fmt.Printf("PublishWithContext with exchange: %s and routing key %s\n", e.exchange, rk)
+	if err := ln.ch.PublishWithContext(ctx, e.exchange, rk /*mandatory*/, false, false, pub); err != nil {
+		fmt.Printf("PublishWithContext with exchange: %s and routing key %s with errors %s\n", e.exchange, rk, err)
 		return err
 	}
-
-	// Đợi kết quả: Return hoặc Confirm
-	// Lưu ý: với kiểu publish tuần tự (nhờ e.mu), confirm/return tiếp theo được coi là của message vừa publish.
+	//Chờ confirm/return của CHÍNH message vừa publish (trong lane này)
 	select {
-	case ret := <-e.returns:
-		// Unroutable: không khớp bất kỳ binding nào
-		return fmt.Errorf("unroutable: exchange=%s rk=%s reply=%d %s", ret.Exchange, ret.RoutingKey, ret.ReplyCode, ret.ReplyText)
-	case conf := <-e.confirms:
+	// case ret := <-ln.returns:
+	// 	return fmt.Errorf("unroutable: exchange=%s rk=%s reply=%d %s", ret.Exchange, ret.RoutingKey, ret.ReplyCode, ret.ReplyText)
+	case conf := <-ln.confirms:
 		if !conf.Ack {
 			return fmt.Errorf("broker NACKed: exchange=%s rk=%s", e.exchange, rk)
 		}
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
-	case <-time.After(5 * time.Second):
+	case <-time.After(1 * time.Second):
 		return fmt.Errorf("publish confirm timeout: exchange=%s rk=%s", e.exchange, rk)
 	}
 }
 
 func (e *egress) Close() error {
-	return e.ch.Close()
+	var firstErr error
+	for i := range e.lanes {
+		if err := e.lanes[i].ch.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
 }
