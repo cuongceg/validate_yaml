@@ -100,5 +100,5 @@ scrape_configs:
 ```
 sudo docker-compose up -d
 ```
-- Check status of data source is up on web [Prometheus](localhost:9090)
-- Add source data from Prometheus on web [Grafana](localhost:3000)
+- Check status of data source is up on web [Prometheus](http://localhost:9090/)
+- Add source data from Prometheus on web [Grafana](http://localhost:3000/)
