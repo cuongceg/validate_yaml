@@ -1,0 +1,11 @@
+# log file 
+*.log
+
+# config file
+./configs/
+*.yaml
+*.json
+source_dump.txt
+
+# build files
+./configs/*

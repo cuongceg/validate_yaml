@@ -13,7 +13,7 @@ proto:
 	protoc --go_out=./proto/ ./proto/envelop/envelop.proto
 
 example-config:
-	go run ./cmd/cfgcheck --config configs/user_configs.yaml --example true
+	go run ./cmd/cfgcheck --config configs/user_config.yaml --example true
 
 run:
-	go run ./cmd/cfgcheck --config configs/user_configs.yaml
+	go run ./cmd/cfgcheck --config configs/user_config.yaml
