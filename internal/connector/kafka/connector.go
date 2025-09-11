@@ -48,11 +48,12 @@ func (c *Connector) Open() error {
 			GroupID:         ic.GroupID,
 			Topic:           ic.Topic,
 			Dialer:          c.dialer,
-			MinBytes:        1e3,
-			MaxBytes:        10e6,
-			MaxWait:         10 * time.Millisecond,
+			MinBytes:        1 << 10,
+			MaxBytes:        10 << 20,
+			MaxWait:         5 * time.Millisecond,
 			QueueCapacity:   100000,
 			ReadLagInterval: 0,
+			CommitInterval:  0,
 		})
 		c.readers[ic.SourceName] = r
 	}
