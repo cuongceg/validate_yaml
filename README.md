@@ -1,6 +1,6 @@
 # How to start
 ## Install Kafka on Ubuntu(host machine)
-- Install Java and check java version
+- Install Java and check Java version
 - Download Kafka
 ```
 sudo mkdir /home/kafka
@@ -8,7 +8,7 @@ cd /home/kafka
 curl "https://downloads.apache.org/kafka/2.8.2/kafka_2.13-2.8.2.tgz" -o /home/kafka.tgz
 sudo tar -xvzf /home/kafka.tgz --strip 1
 ```
-- Create kafka service in Ubuntu system
+- Create a Kafka service in the Ubuntu system(Kafka version < 3.5 and Ubuntu <= 20.04)
 ```
 sudo nano /etc/systemd/system/kafka.service
 
@@ -32,7 +32,29 @@ Restart=on-abnormal
 
 WantedBy=multi-user.target
 ```
-- Create zookeeper service in Ubuntu system
+- Create a Kafka service in the Ubuntu system(Kafka version > 3.5 and Ubuntu > 20.04)
+```
+[Unit]
+Description=Apache Kafka (KRaft mode)
+After=network.target
+
+[Service]
+Type=simple
+User=kafka
+#JMX
+Environment="JMX_PORT=9999"
+Environment="KAFKA_OPTS=-Dcom.sun.management.jmxremote.local.only=false -Dcom.s>
+
+ExecStart=/opt/kafka/bin/kafka-server-start.sh /opt/kafka/config/kraft/server.properties
+ExecStop=/opt/kafka/bin/kafka-server-stop.sh
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+- Create a zookeeper service in the Ubuntu system(if you use kafka version higher than 3.5.0, you can igore this and use Kraft instead)
 ```
 [Unit]
 
@@ -53,6 +75,10 @@ ExecStart=/home/domanhcuong/Downloads/bin/zookeeper-server-start.sh /home/domanh
 ExecStop=/home/domanhcuong/Downloads/bin/zookeeper-server-stop.sh
 
 Restart=on-abnormal
+
+[Install]
+
+WantedBy=multi-user.target
 ```
 - Start service
 ```
